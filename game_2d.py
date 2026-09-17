@@ -311,11 +311,6 @@ while running:
             reset_rect
         )
 
-
-    # =========================
-    # UPDATE DISPLAY
-    # =========================
-
     pygame.display.flip()
 
 pygame.quit()
