@@ -274,11 +274,6 @@ while running:
         (20, 55)
     )
 
-
-    # =========================
-    # WIN MESSAGE
-    # =========================
-
     if collected == 5:
 
         win_text = big_font.render(
