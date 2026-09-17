@@ -262,7 +262,6 @@ while running:
         (20, 20)
     )
 
-
     controls_text = font.render(
         "WASD / Arrow Keys: Move",
         True,
