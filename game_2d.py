@@ -318,10 +318,5 @@ while running:
 
     pygame.display.flip()
 
-
-# =========================
-# EXIT
-# =========================
-
 pygame.quit()
 
