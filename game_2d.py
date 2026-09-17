@@ -286,7 +286,6 @@ while running:
             True,
             COIN_COLOR
         )
-
         win_rect = win_text.get_rect(
             center=(WIDTH / 2, HEIGHT / 2)
         )
@@ -295,7 +294,6 @@ while running:
             win_text,
             win_rect
         )
-
         reset_text = font.render(
             "Press SPACE to play again",
             True,
