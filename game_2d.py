@@ -1,8 +1,13 @@
+import argparse
+import threading
+import time
 
 import pygame
+import serial
+
 
 # =========================
-# SETTINGS
+# GAME SETTINGS
 # =========================
 
 WIDTH = 900
@@ -19,33 +24,116 @@ TEXT_COLOR = (255, 255, 255)
 
 
 # =========================
-# INITIALIZE PYGAME
+# COMMAND LINE
+# =========================
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--port", help="Arduino serial port, e.g. COM4")
+args = parser.parse_args()
+
+
+# =========================
+# ARDUINO CONTROLLER
+# =========================
+
+controller = [512, 512, 0, 512, 512, 0]
+controller_lock = threading.Lock()
+
+
+def read_controller(port_name):
+    """Continuously read joystick data from Arduino."""
+
+    try:
+        ser = serial.Serial(port_name, 115200, timeout=1)
+
+        print(f"Connected to Arduino on {port_name}")
+
+        while True:
+            line = ser.readline().decode(
+                "utf-8",
+                errors="ignore"
+            ).strip()
+
+            if not line:
+                continue
+
+            values = line.split(",")
+
+            if len(values) != 6:
+                continue
+
+            try:
+                values = [int(value) for value in values]
+
+                # Make sure values are valid
+                if (
+                    0 <= values[0] <= 1023
+                    and 0 <= values[1] <= 1023
+                    and values[2] in (0, 1)
+                    and 0 <= values[3] <= 1023
+                    and 0 <= values[4] <= 1023
+                    and values[5] in (0, 1)
+                ):
+                    with controller_lock:
+                        controller[:] = values
+
+            except ValueError:
+                continue
+
+    except Exception as e:
+        print("Arduino connection error:", e)
+
+
+# Start Arduino reader if a port was provided
+if args.port:
+    controller_thread = threading.Thread(
+        target=read_controller,
+        args=(args.port,),
+        daemon=True
+    )
+
+    controller_thread.start()
+
+
+# =========================
+# JOYSTICK AXIS
+# =========================
+
+def axis(raw):
+    """Convert Arduino analog value 0-1023 into -1 to +1."""
+
+    value = (raw - 512) / 511
+
+    # Dead zone prevents small joystick drift
+    if abs(value) < 0.12:
+        return 0
+
+    return value
+
+
+# =========================
+# PYGAME
 # =========================
 
 pygame.init()
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("2D Coin Challenge")
+pygame.display.set_caption("Arduino Joystick Coin Challenge")
 
 clock = pygame.time.Clock()
 
 font = pygame.font.Font(None, 36)
-big_font = pygame.font.Font(None, 60)
+big_font = pygame.font.Font(None, 64)
 
 
 # =========================
-# PLAYER
+# PLAYER AND COINS
 # =========================
 
 player = pygame.Vector2(
     WIDTH / 2,
     HEIGHT / 2
 )
-
-
-# =========================
-# COINS
-# =========================
 
 coin_positions = [
     (100, 100),
@@ -61,12 +149,7 @@ coins = [
 ]
 
 
-# =========================
-# RESET GAME
-# =========================
-
 def reset_game():
-
     global coins
 
     player.update(
@@ -81,16 +164,18 @@ def reset_game():
 
 
 # =========================
-# GAME LOOP
+# MAIN GAME LOOP
 # =========================
 
 running = True
 
 while running:
 
-    # Time since previous frame
-    dt = min(clock.tick(60) / 1000, 0.05)
-
+    # Time since last frame
+    dt = min(
+        clock.tick(60) / 1000,
+        0.05
+    )
 
     # =========================
     # EVENTS
@@ -103,56 +188,58 @@ while running:
 
 
     # =========================
-    # KEYBOARD INPUT
+    # MOVEMENT
     # =========================
 
-    keys = pygame.key.get_pressed()
+    movement = pygame.Vector2(0, 0)
 
-    movement = pygame.Vector2(
+    if args.port:
 
-        int(
-            keys[pygame.K_RIGHT]
-            or keys[pygame.K_d]
+        # Read Arduino controller
+        with controller_lock:
+            j1_x = controller[0]
+            j1_y = controller[1]
+            j1_sw = controller[2]
+
+        # Joystick 1 controls player
+        movement.x = axis(j1_x)
+        movement.y = axis(j1_y)
+
+        # Joystick button resets game
+        if j1_sw == 1:
+            reset_game()
+
+    else:
+
+        # Keyboard controls
+        keys = pygame.key.get_pressed()
+
+        movement.x = (
+            int(keys[pygame.K_RIGHT] or keys[pygame.K_d])
+            -
+            int(keys[pygame.K_LEFT] or keys[pygame.K_a])
         )
-        -
-        int(
-            keys[pygame.K_LEFT]
-            or keys[pygame.K_a]
-        ),
 
-        int(
-            keys[pygame.K_DOWN]
-            or keys[pygame.K_s]
+        movement.y = (
+            int(keys[pygame.K_DOWN] or keys[pygame.K_s])
+            -
+            int(keys[pygame.K_UP] or keys[pygame.K_w])
         )
-        -
-        int(
-            keys[pygame.K_UP]
-            or keys[pygame.K_w]
-        )
-    )
+
+        if keys[pygame.K_SPACE]:
+            reset_game()
 
 
-    # =========================
-    # NORMALIZE MOVEMENT
-    # =========================
-
-    # Prevent diagonal movement
-    # from being faster.
-
+    # Prevent diagonal movement from being faster
     if movement.length_squared() > 1:
-
         movement = movement.normalize()
 
 
-    # =========================
-    # MOVE PLAYER
-    # =========================
-
+    # Move player
     player += movement * PLAYER_SPEED * dt
 
 
     # Keep player inside window
-
     player.x = max(
         PLAYER_SIZE / 2,
         min(
@@ -171,53 +258,28 @@ while running:
 
 
     # =========================
-    # RESET WITH SPACE
-    # =========================
-
-    if keys[pygame.K_SPACE]:
-
-        reset_game()
-
-
-    # =========================
     # COIN COLLISION
     # =========================
 
     coins = [
-
         coin
-
         for coin in coins
-
         if player.distance_to(coin)
-        >
-        PLAYER_SIZE / 2 + COIN_RADIUS
+        > PLAYER_SIZE / 2 + COIN_RADIUS
     ]
 
-
-    # =========================
-    # SCORE
-    # =========================
-
-    collected = (
-        len(coin_positions)
-        - len(coins)
-    )
+    collected = len(coin_positions) - len(coins)
 
 
     # =========================
-    # DRAW BACKGROUND
+    # DRAW
     # =========================
 
     screen.fill(BACKGROUND)
 
 
-    # =========================
-    # DRAW COINS
-    # =========================
-
+    # Draw coins
     for coin in coins:
-
         pygame.draw.circle(
             screen,
             COIN_COLOR,
@@ -226,10 +288,7 @@ while running:
         )
 
 
-    # =========================
-    # DRAW PLAYER
-    # =========================
-
+    # Draw player
     player_rect = pygame.Rect(
         0,
         0,
@@ -247,10 +306,7 @@ while running:
     )
 
 
-    # =========================
-    # UI
-    # =========================
-
+    # Score
     score_text = font.render(
         f"Coins: {collected}/5",
         True,
@@ -262,8 +318,15 @@ while running:
         (20, 20)
     )
 
+
+    # Controls
+    if args.port:
+        controls = "Joystick 1: Move | Press joystick: Reset"
+    else:
+        controls = "WASD / Arrow Keys: Move | SPACE: Reset"
+
     controls_text = font.render(
-        "WASD / Arrow Keys: Move",
+        controls,
         True,
         TEXT_COLOR
     )
@@ -273,6 +336,8 @@ while running:
         (20, 55)
     )
 
+
+    # Win message
     if collected == 5:
 
         win_text = big_font.render(
@@ -280,6 +345,7 @@ while running:
             True,
             COIN_COLOR
         )
+
         win_rect = win_text.get_rect(
             center=(WIDTH / 2, HEIGHT / 2)
         )
@@ -288,14 +354,18 @@ while running:
             win_text,
             win_rect
         )
+
         reset_text = font.render(
-            "Press SPACE to play again",
+            "Press joystick button to play again",
             True,
             TEXT_COLOR
         )
 
         reset_rect = reset_text.get_rect(
-            center=(WIDTH / 2, HEIGHT / 2 + 60)
+            center=(
+                WIDTH / 2,
+                HEIGHT / 2 + 60
+            )
         )
 
         screen.blit(
@@ -303,7 +373,8 @@ while running:
             reset_rect
         )
 
+
     pygame.display.flip()
 
-pygame.quit()
 
+pygame.quit()
